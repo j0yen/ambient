@@ -41,6 +41,31 @@ required_commands = [
 ]
 
 [[lane]]
+id = "agent-metadata"
+description = "Orchestrator-owned agent/ tree (intent-card amendments, proof-lane updates, owner-map)"
+globs = [
+  "agent/**",
+]
+required_commands = [
+  "true",
+]
+note = "agent/ is owner=orchestrator per owner-map. Changes are routed but not verified at runtime; the human-loop review catches semantic drift."
+
+[[lane]]
+id = "docs"
+description = "Publish artifacts: README, LICENSE files, and other top-level docs"
+globs = [
+  "README.md",
+  "LICENSE-MIT",
+  "LICENSE-APACHE",
+  "*.md",
+]
+required_commands = [
+  "true",
+]
+note = "Stage-6 publish-prep adds README + LICENSEs; no behavior change to gate."
+
+[[lane]]
 id = "harness-readonly"
 description = "Harness files; should never change after scaffold"
 globs = [
