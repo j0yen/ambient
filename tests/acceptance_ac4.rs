@@ -11,12 +11,59 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use ambient::{Throttle, parse_event_line, run_stream};
+use std::io::{BufReader, Cursor};
+
+#[test]
+fn parse_rejects_malformed() {
+    // Each form of malformed input fails to parse, but with a real
+    // ParseError (i.e. the parser does not panic).
+    assert!(parse_event_line("not json at all").is_err());
+    assert!(parse_event_line("{\"kind\":\"unknown_kind\",\"unix\":1}").is_err());
+    // Missing required unix field.
+    assert!(parse_event_line("{\"kind\":\"file_save\"}").is_err());
+    // Missing run_seconds for high_focus.
+    assert!(parse_event_line("{\"kind\":\"high_focus\",\"unix\":1}").is_err());
+}
 
 #[test]
 fn acceptance_ac4() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC4 not yet implemented — see file header");
+    // Three malformed lines interleaved with three valid events. The
+    // stream must finish, exit cleanly (Ok return), and emit only the
+    // valid events' cues. Malformed lines produce diagnostics on
+    // stderr but do not abort.
+    let input = b"not json\n\
+                  {\"kind\":\"file_save\",\"unix\":100}\n\
+                  {\"kind\":\"unknown_kind\",\"unix\":150}\n\
+                  {\"kind\":\"build_pass\",\"unix\":200}\n\
+                  {\"kind\":\"file_save\"}\n\
+                  {\"kind\":\"build_fail\",\"unix\":300}\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let result = run_stream(reader, &mut out, &mut err, Throttle::defaults());
+    assert!(result.is_ok(), "stream must finish cleanly on malformed input");
+    assert_eq!(result.unwrap(), 3, "exactly the 3 valid events should emit cues");
+    let lines: Vec<&str> = std::str::from_utf8(&out).unwrap().lines().collect();
+    assert_eq!(lines.len(), 3);
+    // Each malformed line must produce a stderr diagnostic so the user
+    // can debug their telemetry pipeline.
+    let err_str = std::str::from_utf8(&err).unwrap();
+    let diag_count = err_str.matches("skipping line").count();
+    assert_eq!(diag_count, 3, "expected one stderr diagnostic per malformed line, got: {err_str:?}");
+}
+
+#[test]
+fn empty_lines_are_silent_skip() {
+    // Empty / whitespace-only lines are common at EOF (e.g. trailing
+    // newline) and must produce no diagnostic.
+    let input = b"\n   \n{\"kind\":\"file_save\",\"unix\":1}\n\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let emitted = run_stream(reader, &mut out, &mut err, Throttle::defaults()).unwrap();
+    assert_eq!(emitted, 1);
+    assert!(err.is_empty(), "empty lines must not produce diagnostics");
 }

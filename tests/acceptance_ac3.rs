@@ -11,12 +11,73 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use ambient::{Throttle, run_stream};
+use std::io::{BufReader, Cursor};
+
+#[test]
+fn defaults_match_prd() {
+    let t = Throttle::defaults();
+    assert_eq!(t.chime_secs, 4);
+    assert_eq!(t.piano_secs, 8);
+    assert_eq!(t.settle_secs, 30);
+    assert_eq!(t.grain_secs, 15);
+    assert_eq!(t.drift_secs, 120);
+    assert_eq!(t.poly_secs, 30);
+    assert_eq!(t.silence_secs, 300);
+}
 
 #[test]
 fn acceptance_ac3() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC3 not yet implemented — see file header");
+    // Five file_save events within the 4s throttle window: unix
+    // 100, 101, 102, 103, 103. Only the first must emit; the rest
+    // are strictly inside the open window (now - last < 4) and must
+    // be silently dropped. The 5th (unix=103) tests that re-using
+    // the same timestamp as a prior in-window event is still a drop.
+    let input = b"{\"kind\":\"file_save\",\"unix\":100}\n\
+                  {\"kind\":\"file_save\",\"unix\":101}\n\
+                  {\"kind\":\"file_save\",\"unix\":102}\n\
+                  {\"kind\":\"file_save\",\"unix\":103}\n\
+                  {\"kind\":\"file_save\",\"unix\":103}\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let emitted = run_stream(reader, &mut out, &mut err, Throttle::defaults()).unwrap();
+    assert_eq!(emitted, 1, "only the first chime should fire inside the 4s throttle");
+    let lines: Vec<&str> = std::str::from_utf8(&out).unwrap().lines().collect();
+    assert_eq!(lines.len(), 1, "stdout should hold exactly one cue line");
+    // No stderr — suppressed events are silent (not malformed).
+    assert!(err.is_empty(), "suppressed events must produce no diagnostic, got: {err:?}");
+
+    // Second wave: file_save at unix=104, then file_save at unix=108
+    // (exactly 4s later). The latter must fire because the gap is
+    // ">= 4" not "> 4" (i.e. the boundary is the throttle window's
+    // closing edge, not inside it).
+    let input2 = b"{\"kind\":\"file_save\",\"unix\":104}\n\
+                   {\"kind\":\"file_save\",\"unix\":108}\n";
+    let reader2 = BufReader::new(Cursor::new(input2));
+    let mut out2: Vec<u8> = Vec::new();
+    let mut err2: Vec<u8> = Vec::new();
+    let emitted2 = run_stream(reader2, &mut out2, &mut err2, Throttle::defaults()).unwrap();
+    assert_eq!(emitted2, 2, "events spaced exactly chime_secs apart must both fire");
+}
+
+#[test]
+fn distinct_voices_do_not_interact() {
+    // A burst of mixed kinds: each voice should fire once even though
+    // they're all packed within 1 second of each other, because the
+    // throttle is per-voice not global.
+    let input = b"{\"kind\":\"file_save\",\"unix\":100}\n\
+                  {\"kind\":\"file_create\",\"unix\":100}\n\
+                  {\"kind\":\"build_pass\",\"unix\":100}\n\
+                  {\"kind\":\"build_fail\",\"unix\":100}\n\
+                  {\"kind\":\"idle\",\"unix\":100}\n\
+                  {\"kind\":\"high_focus\",\"unix\":100,\"run_seconds\":60}\n\
+                  {\"kind\":\"fragmentation\",\"unix\":100,\"switch_count\":3}\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let emitted = run_stream(reader, &mut out, &mut err, Throttle::defaults()).unwrap();
+    assert_eq!(emitted, 7, "per-voice throttle must not interact across voices");
 }

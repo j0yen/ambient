@@ -11,12 +11,30 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use ambient::{Throttle, run_stream};
+use std::io::{BufReader, Cursor};
 
 #[test]
 fn acceptance_ac1() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC1 not yet implemented — see file header");
+    // Three distinct events, far enough apart in unix time that no
+    // throttle will suppress any of them. Expect three cue lines out,
+    // each a valid JSON object, in the same order as the input.
+    let input = b"{\"kind\":\"file_save\",\"unix\":100}\n\
+                  {\"kind\":\"build_pass\",\"unix\":200}\n\
+                  {\"kind\":\"file_create\",\"unix\":300}\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let emitted = run_stream(reader, &mut out, &mut err, Throttle::defaults()).unwrap();
+    assert_eq!(emitted, 3, "expected one cue per input event");
+
+    let s = std::str::from_utf8(&out).unwrap();
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(lines.len(), 3, "expected three NDJSON lines on stdout, got: {s:?}");
+    for line in &lines {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        assert!(v.is_object(), "each cue line must be a JSON object");
+    }
 }

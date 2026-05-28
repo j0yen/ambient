@@ -11,12 +11,39 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use ambient::{Throttle, run_stream};
+use std::io::{BufReader, Cursor};
 
 #[test]
 fn acceptance_ac7() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC7 not yet implemented — see file header");
+    // high_focus with run_seconds=3600 must carry intensity=3600.
+    // fragmentation with switch_count=12 must carry intensity=12.
+    // file_save (a non-intensity-bearing event) must NOT carry an
+    // intensity field.
+    let input = b"{\"kind\":\"high_focus\",\"unix\":1000,\"run_seconds\":3600}\n\
+                  {\"kind\":\"fragmentation\",\"unix\":2000,\"switch_count\":12}\n\
+                  {\"kind\":\"file_save\",\"unix\":3000}\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    run_stream(reader, &mut out, &mut err, Throttle::defaults()).unwrap();
+    let lines: Vec<&str> = std::str::from_utf8(&out).unwrap().lines().collect();
+    assert_eq!(lines.len(), 3);
+
+    let v_focus: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(v_focus.get("kind").and_then(|x| x.as_str()), Some("high_focus"));
+    assert_eq!(v_focus.get("intensity").and_then(|x| x.as_u64()), Some(3600));
+
+    let v_frag: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    assert_eq!(v_frag.get("kind").and_then(|x| x.as_str()), Some("fragmentation"));
+    assert_eq!(v_frag.get("intensity").and_then(|x| x.as_u64()), Some(12));
+
+    let v_save: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+    assert_eq!(v_save.get("kind").and_then(|x| x.as_str()), Some("file_save"));
+    assert!(
+        v_save.get("intensity").is_none(),
+        "file_save cues must not carry intensity, got: {lines:?}"
+    );
 }

@@ -11,12 +11,66 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+const BIN: &str = env!("CARGO_BIN_EXE_ambient");
+
+fn run_with_input(args: &[&str], input: &[u8]) -> (Vec<u8>, Vec<u8>, i32) {
+    let mut child = Command::new(BIN)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let stdin = child.stdin.as_mut().unwrap();
+        stdin.write_all(input).unwrap();
+    }
+    let output = child.wait_with_output().unwrap();
+    (output.stdout, output.stderr, output.status.code().unwrap_or(-1))
+}
 
 #[test]
 fn acceptance_ac5() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC5 not yet implemented — see file header");
+    // Same five-file-save burst from AC3, but pass --chime-secs=0 so
+    // throttling is disabled. All five must emit cues.
+    let input = b"{\"kind\":\"file_save\",\"unix\":100}\n\
+                  {\"kind\":\"file_save\",\"unix\":101}\n\
+                  {\"kind\":\"file_save\",\"unix\":102}\n\
+                  {\"kind\":\"file_save\",\"unix\":103}\n\
+                  {\"kind\":\"file_save\",\"unix\":104}\n";
+    let (out, _err, code) = run_with_input(&["--chime-secs", "0"], input);
+    assert_eq!(code, 0, "CLI must exit 0 on clean input");
+    let lines: Vec<&str> = std::str::from_utf8(&out).unwrap().lines().collect();
+    assert_eq!(lines.len(), 5, "with chime-secs=0, all 5 saves should fire");
+
+    // Confirm the inverse: with chime-secs=60, only the first fires.
+    let (out2, _err2, code2) = run_with_input(&["--chime-secs", "60"], input);
+    assert_eq!(code2, 0);
+    let lines2: Vec<&str> = std::str::from_utf8(&out2).unwrap().lines().collect();
+    assert_eq!(lines2.len(), 1, "with chime-secs=60, only the first save should fire");
+}
+
+#[test]
+fn all_seven_voice_flags_accepted() {
+    // Each voice flag must parse and be accepted. We pass them all
+    // with a non-default value and one event; the test is mainly that
+    // the CLI doesn't reject any flag spelling.
+    let args = [
+        "--chime-secs", "1",
+        "--piano-secs", "1",
+        "--settle-secs", "1",
+        "--grain-secs", "1",
+        "--silence-secs", "1",
+        "--drift-secs", "1",
+        "--poly-secs", "1",
+    ];
+    let input = b"{\"kind\":\"file_save\",\"unix\":1}\n";
+    let (out, _err, code) = run_with_input(&args, input);
+    assert_eq!(code, 0, "CLI must accept all seven voice override flags");
+    assert_eq!(std::str::from_utf8(&out).unwrap().lines().count(), 1);
 }

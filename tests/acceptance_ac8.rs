@@ -11,12 +11,33 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use std::process::Command;
+
+const BIN: &str = env!("CARGO_BIN_EXE_ambient");
 
 #[test]
 fn acceptance_ac8() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC8 not yet implemented — see file header");
+    // --help exits 0 and lists every voice override flag.
+    let out = Command::new(BIN).arg("--help").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "--help must exit 0");
+    let help = String::from_utf8_lossy(&out.stdout).to_string();
+    for flag in &[
+        "--chime-secs",
+        "--piano-secs",
+        "--settle-secs",
+        "--grain-secs",
+        "--silence-secs",
+        "--drift-secs",
+        "--poly-secs",
+    ] {
+        assert!(help.contains(flag), "--help must mention {flag}, got:\n{help}");
+    }
+
+    // --version exits 0.
+    let out = Command::new(BIN).arg("--version").output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "--version must exit 0");
+    let v = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(v.contains("ambient"), "--version must mention crate name, got: {v}");
 }

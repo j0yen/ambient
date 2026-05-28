@@ -11,12 +11,39 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use ambient::{Throttle, run_stream};
+use std::io::{BufReader, Cursor};
 
 #[test]
 fn acceptance_ac6() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC6 not yet implemented — see file header");
+    // Send one event of each kind; check every emitted cue is a JSON
+    // object containing {voice, kind, unix}, with `unix` an integer
+    // and `voice`+`kind` strings.
+    let input = b"{\"kind\":\"file_save\",\"unix\":1}\n\
+                  {\"kind\":\"file_create\",\"unix\":2}\n\
+                  {\"kind\":\"build_pass\",\"unix\":3}\n\
+                  {\"kind\":\"build_fail\",\"unix\":4}\n\
+                  {\"kind\":\"idle\",\"unix\":5}\n\
+                  {\"kind\":\"high_focus\",\"unix\":6,\"run_seconds\":60}\n\
+                  {\"kind\":\"fragmentation\",\"unix\":7,\"switch_count\":2}\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    run_stream(reader, &mut out, &mut err, Throttle::defaults()).unwrap();
+
+    let s = std::str::from_utf8(&out).unwrap();
+    for (lineno, line) in s.lines().enumerate() {
+        let v: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|e| panic!("line {lineno}: {e}: {line:?}"));
+        assert!(v.is_object(), "line {lineno}: not a JSON object: {line:?}");
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("voice"), "line {lineno}: missing voice field: {line:?}");
+        assert!(obj.contains_key("kind"), "line {lineno}: missing kind field: {line:?}");
+        assert!(obj.contains_key("unix"), "line {lineno}: missing unix field: {line:?}");
+        assert!(obj.get("voice").unwrap().is_string(), "voice must be a string");
+        assert!(obj.get("kind").unwrap().is_string(), "kind must be a string");
+        assert!(obj.get("unix").unwrap().is_i64(), "unix must be an integer");
+    }
 }

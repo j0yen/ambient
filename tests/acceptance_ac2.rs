@@ -11,12 +11,52 @@
 //! the panic stub with a real assertion that verifies the AC
 //! description above.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::doc_markdown, clippy::panic, clippy::needless_collect, clippy::indexing_slicing, clippy::redundant_closure_for_method_calls, clippy::missing_panics_doc, clippy::missing_errors_doc, clippy::print_stderr, clippy::print_stdout)]
+
+use ambient::{Throttle, run_stream};
+use std::collections::HashSet;
+use std::io::{BufReader, Cursor};
 
 #[test]
 fn acceptance_ac2() {
-    // edit-agent: replace this stub with a real assertion. The
-    // panic keeps the test failing until you do, so the loop
-    // sees a real Stage 3 signal.
-    panic!("AC AC2 not yet implemented — see file header");
+    // One event of each kind, well-separated so no throttle fires.
+    // Verify (a) all seven appear and (b) the kind→voice mapping is the
+    // exact PRD §3 table.
+    let input = b"{\"kind\":\"file_save\",\"unix\":1000}\n\
+                  {\"kind\":\"file_create\",\"unix\":2000}\n\
+                  {\"kind\":\"build_pass\",\"unix\":3000}\n\
+                  {\"kind\":\"build_fail\",\"unix\":4000}\n\
+                  {\"kind\":\"idle\",\"unix\":5000}\n\
+                  {\"kind\":\"high_focus\",\"unix\":6000,\"run_seconds\":3600}\n\
+                  {\"kind\":\"fragmentation\",\"unix\":7000,\"switch_count\":12}\n";
+    let reader = BufReader::new(Cursor::new(input));
+    let mut out: Vec<u8> = Vec::new();
+    let mut err: Vec<u8> = Vec::new();
+    let emitted = run_stream(reader, &mut out, &mut err, Throttle::defaults()).unwrap();
+    assert_eq!(emitted, 7, "expected one cue per distinct event kind");
+
+    let s = std::str::from_utf8(&out).unwrap();
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(lines.len(), 7);
+
+    // Expected mappings, indexed by input order.
+    let expected: [(&str, &str); 7] = [
+        ("file_save", "chime"),
+        ("file_create", "piano"),
+        ("build_pass", "settle"),
+        ("build_fail", "grain"),
+        ("idle", "silence"),
+        ("high_focus", "drift"),
+        ("fragmentation", "poly"),
+    ];
+    let mut voices_seen: HashSet<String> = HashSet::new();
+    for (line, (exp_kind, exp_voice)) in lines.iter().zip(expected.iter()) {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        let kind = v.get("kind").and_then(|x| x.as_str()).unwrap();
+        let voice = v.get("voice").and_then(|x| x.as_str()).unwrap();
+        assert_eq!(kind, *exp_kind, "cue kind mismatch for line {line}");
+        assert_eq!(voice, *exp_voice, "cue voice mismatch for kind {exp_kind}");
+        voices_seen.insert(voice.to_string());
+    }
+    assert_eq!(voices_seen.len(), 7, "all seven voices must be distinct");
 }
