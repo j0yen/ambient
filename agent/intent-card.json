@@ -1,0 +1,133 @@
+{
+  "schema": "autobuilder.intent_card.v1",
+  "prd_source": "/home/jsy/wintermute/autobuilder/PRD-ambient-compositions.md",
+  "root_motivation": "Software work is silent and visually homogeneous, so days bleed together. A generative ambient piece driven by jsy's laptop telemetry (file saves, builds, idle, focus, fragmentation) gives the workday auditory texture and yields a daily .wav archive — an audible diary. This crate is the orchestrator slice (PRD Phase 1): a Rust binary that ingests an NDJSON telemetry stream and emits NDJSON parameter-bus cues for an external audio engine (Sonic Pi / SuperCollider). The engine, sample library, .wav recorder, and annual album ritual are explicit non-goals here.",
+  "user_persona": "jsy at the laptop during work hours, piping a real or synthetic NDJSON telemetry stream (from ctrace, build hooks, or test fixtures) into `ambient` and routing its NDJSON cue output to a separate audio-engine bridge process. Sole operator; no multi-user surface.",
+  "unfakeable_metric": {
+    "name": "tests_pass_count",
+    "lower_is_better": false,
+    "harness_command": "cargo test --workspace --no-fail-fast",
+    "target": null
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "level": "MUST",
+      "description": "Reads newline-delimited JSON telemetry events from stdin and writes newline-delimited JSON cue events to stdout, one cue per accepted input event (subject to throttle/silence rules).",
+      "test": "tests/acceptance_ac1_stdio_ndjson.rs"
+    },
+    {
+      "id": "AC2",
+      "level": "MUST",
+      "description": "Recognizes the seven PRD §3 event kinds — file_save, file_create, build_pass, build_fail, idle, high_focus, fragmentation — and maps each to a distinct voice (chime, piano, settle, grain, silence, drift, poly respectively) in the emitted cue.",
+      "test": "tests/acceptance_ac2_seven_voices.rs"
+    },
+    {
+      "id": "AC3",
+      "level": "MUST",
+      "description": "Throttles each voice with a per-voice minimum gap so a burst of incoming events of the same kind does not produce a burst of cues; defaults (seconds): chime 4, piano 8, settle 30, grain 15, drift 120, poly 30, silence 300. Suppressed events are dropped silently (no cue line emitted).",
+      "test": "tests/acceptance_ac3_throttling.rs"
+    },
+    {
+      "id": "AC4",
+      "level": "MUST",
+      "description": "Malformed input lines (invalid JSON, unknown kind, missing required field) are skipped without aborting the run; the process continues consuming subsequent lines and exits 0 on EOF.",
+      "test": "tests/acceptance_ac4_malformed_resilience.rs"
+    },
+    {
+      "id": "AC5",
+      "level": "MUST",
+      "description": "Per-voice throttle gap is configurable via CLI flags (e.g. --chime-secs, --piano-secs, --settle-secs, --grain-secs, --drift-secs, --poly-secs, --silence-secs); flags override the defaults.",
+      "test": "tests/acceptance_ac5_cli_overrides.rs"
+    },
+    {
+      "id": "AC6",
+      "level": "MUST",
+      "description": "Emitted cue lines are valid JSON objects carrying at minimum {voice, kind, unix} and pass `serde_json::from_str::<Value>` round-trip.",
+      "test": "tests/acceptance_ac6_cue_shape.rs"
+    },
+    {
+      "id": "AC7",
+      "level": "SHOULD",
+      "description": "high_focus and fragmentation cues carry an intensity-like numeric field derived from the event payload (run_seconds for high_focus, switch_count for fragmentation), so the downstream engine can scale drift slope / polyrhythmic density.",
+      "test": "tests/acceptance_ac7_intensity_fields.rs"
+    },
+    {
+      "id": "AC8",
+      "level": "SHOULD",
+      "description": "The cli accepts --help and --version and exits 0; --help lists every voice override flag.",
+      "test": "tests/acceptance_ac8_help_version.rs"
+    }
+  ],
+  "scope": [
+    "Rust CLI binary `ambient` plus a small library crate exposing the parse/map/throttle pipeline.",
+    "NDJSON ingest from stdin; NDJSON cue emit to stdout; one-pass streaming.",
+    "Seven event-kind → voice mappings per PRD §3.",
+    "Per-voice throttle with overridable defaults.",
+    "Resilient parsing: malformed lines logged to stderr (or silently dropped) but never abort the run.",
+    "Unit + integration test suite covering the AC table."
+  ],
+  "non_goals": [
+    "Audio synthesis or sample playback (no Sonic Pi / SuperCollider / OSC client in this crate).",
+    "Daily .wav recording or annual album mastering.",
+    "Foreground music: no melodies, no songs, no drums.",
+    "Live remix UI / web dashboard / TUI.",
+    "Distribution to anyone beyond jsy + K + M.",
+    "Sample-library curation (jsy curates manually)."
+  ],
+  "hard_constraints": {
+    "rust_edition": "2024",
+    "target_kind": "cli",
+    "deny_unsafe": true,
+    "max_deps": 12,
+    "msrv": "1.85",
+    "additional": {
+      "license": "MIT OR Apache-2.0",
+      "binary_name": "ambient",
+      "ndjson_only": true
+    }
+  },
+  "five_whys_trace": [
+    {
+      "why": 1,
+      "q": "Why build an ambient-composition orchestrator?",
+      "a": "Because PRD-ambient-compositions wants a generative piece driven by laptop signals; the orchestrator is the gluing piece that turns telemetry into engine parameters."
+    },
+    {
+      "why": 2,
+      "q": "Why a Rust orchestrator rather than scripting it directly inside Sonic Pi?",
+      "a": "Because the telemetry layer (ctrace, wchg, builds) already lives in Rust/CLI land; a Rust binary stays close to that source, debounces and throttles deterministically, and is testable in CI without an audio engine running."
+    },
+    {
+      "why": 3,
+      "q": "Why a one-pass NDJSON in / NDJSON out pipeline instead of OSC sockets in v1?",
+      "a": "Because the PRD's risk catalog flags 'distraction' and 'default ugliness'; keeping the orchestrator a pure stdio transducer makes it trivially testable, scriptable, and replayable from archived event logs without binding to a live audio engine."
+    },
+    {
+      "why": 4,
+      "q": "Why throttle per voice with a minimum gap rather than batching or smoothing?",
+      "a": "Because the failure mode the PRD fears is 'meditation-app texture': a save-storm becoming a chime-storm. A min-gap throttle directly addresses the burst-to-burst transduction and is easy to reason about in tests."
+    },
+    {
+      "why": 5,
+      "q": "Why expose every voice's throttle gap as a CLI flag instead of a config file?",
+      "a": "Because jsy will iterate on these numbers against taste over months; flag overrides keep iteration cheap (rerun a fixture with `--chime-secs 8`) without a config-format dependency."
+    }
+  ],
+  "ambiguities_resolved": [
+    {
+      "question": "Does this crate also drive the audio engine?",
+      "resolution": "No — PRD §4 splits orchestrator from engine; this crate ends at NDJSON cue stdout. The engine is an external process."
+    },
+    {
+      "question": "What 'voice' label do we use for each PRD event kind?",
+      "resolution": "Adopted the seven-voice table from the prior hand-built README (chime/piano/settle/grain/silence/drift/poly) since it faithfully expresses the PRD §3 prose."
+    },
+    {
+      "question": "What are the default throttle seconds?",
+      "resolution": "chime 4, piano 8, settle 30, grain 15, drift 120, poly 30, silence 300 — carried forward from the hand-built defaults as a reasonable starting point; jsy will tune via CLI flags."
+    }
+  ],
+  "created_at": "2026-05-27T18:35:00Z",
+  "intent_slug": "ambient"
+}
