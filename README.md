@@ -1,66 +1,19 @@
 # ambient
 
-Telemetry-driven parameter orchestrator for a generative ambient piece.
+A Rust CLI that turns a stream of laptop-telemetry events into a stream of cues for a generative ambient piece. Telemetry in, parameter-bus cues out — both NDJSON, one event per line.
 
-A Rust CLI that ingests an NDJSON laptop-telemetry stream (file saves,
-build pass/fail, idle periods, sustained focus, context fragmentation)
-and emits an NDJSON parameter-bus cue stream for an external audio
-engine to consume. The downstream engine (Sonic Pi, SuperCollider,
-etc.), the sample library, the daily `.wav` recorder, and the annual
-album ritual are all out of scope here — `ambient` is the **orchestrator
-slice only** (PRD Phase 1).
+## Why it exists
 
-Per [PRD-ambient-compositions][prd] §1: software work is silent and
-visually homogeneous, so days bleed together. A generative ambient
-piece driven by your own laptop telemetry gives the workday auditory
-texture and yields a daily archive — an audible diary of work.
+Software work is silent and looks the same every day, so the days blur together. The idea here is to give the workday an auditory texture by driving an ambient piece from your own activity — a file save, a build passing, an hour of unbroken focus, a morning spent thrashing between contexts. Each becomes a sound, and the result is an audible diary: you can hear, after the fact, what a day of work sounded like.
 
-[prd]: https://github.com/j0yen/autobuilder/blob/main/PRD-ambient-compositions.md
+`ambient` is the orchestrator slice of that, and only that. It reads telemetry and decides what should make a sound and when; it does not make the sound. The audio engine (Sonic Pi, SuperCollider, an OSC bridge), the sample library, the daily recorder — all of that is downstream and out of scope. The boundary is deliberate: cues are plain NDJSON, so any engine that can read a line of JSON can play them.
 
 ```text
-[ telemetry stream (NDJSON) ]  >  ambient  >  [ parameter-bus cues (NDJSON) ]
-                                                       |
-                                                       v
-                                                [ Sonic Pi / SC / OSC bridge ]
+[ telemetry stream (NDJSON) ]  →  ambient  →  [ parameter-bus cues (NDJSON) ]
+                                                       │
+                                                       ▼
+                                              [ Sonic Pi / SuperCollider / OSC bridge ]
 ```
-
-## Voices
-
-Per PRD §3, each event kind maps to one of seven voices:
-
-| Event           | Voice    | Sonic intent                                          |
-|-----------------|----------|-------------------------------------------------------|
-| `file_save`     | chime    | soft, key-aligned                                     |
-| `file_create`   | piano    | stretched high register                               |
-| `build_pass`    | settle   | low harmonic resolve                                  |
-| `build_fail`    | grain    | grain decay                                           |
-| `idle`          | silence  | actual silence                                        |
-| `high_focus`    | drift    | slow tonic slide (steeper with run length)            |
-| `fragmentation` | poly     | polyrhythmic layering (denser with more switches)     |
-
-## Throttling
-
-Each voice has a minimum gap so a burst of one kind doesn't overwhelm
-the piece. Defaults (seconds): chime 4, piano 8, settle 30, grain 15,
-drift 120, poly 30, silence 300. Override with `--chime-secs N`,
-`--piano-secs N`, etc.
-
-## Acceptance criteria (MUST)
-
-- **AC1.** Reads newline-delimited JSON telemetry events from stdin and
-  writes newline-delimited JSON cue events to stdout, one cue per
-  accepted input event (subject to throttle/silence rules).
-- **AC2.** Recognizes the seven PRD §3 event kinds and maps each to a
-  distinct voice (chime, piano, settle, grain, silence, drift, poly).
-- **AC3.** Throttles each voice with a per-voice minimum gap; defaults
-  chime 4 / piano 8 / settle 30 / grain 15 / drift 120 / poly 30 /
-  silence 300 seconds. Suppressed events drop silently.
-- **AC4.** Malformed input lines (invalid JSON, unknown kind, missing
-  required field) are skipped without aborting the run; exits 0 on EOF.
-- **AC5.** Per-voice throttle gap is configurable via CLI flags.
-- **AC6.** Emitted cue lines are valid JSON objects carrying at minimum
-  `{voice, kind, unix}` and pass `serde_json::from_str::<Value>`
-  round-trip.
 
 ## Install
 
@@ -70,52 +23,58 @@ cargo install --path .
 
 Requires Rust 1.85 or later.
 
-## Usage
+## Quickstart
+
+Pipe NDJSON telemetry in, read NDJSON cues out:
 
 ```sh
-# Synthetic telemetry (one NDJSON event per line):
 cat <<'EOF' | ambient
 {"kind":"file_save","unix":100}
 {"kind":"file_save","unix":101}
 {"kind":"build_pass","unix":110}
 {"kind":"high_focus","unix":200,"run_seconds":3600}
 EOF
-
-# Real wiring (sketch — you supply the audio engine):
-ctrace tail-events | ambient | osc-bridge --target 127.0.0.1:4559
-
-# Tighten the chime throttle to 1s for a dense session:
-ambient --chime-secs 1 < events.ndjson > cues.ndjson
 ```
 
-## Build & test
+Each accepted event yields one cue line carrying at least `{voice, kind, unix}`. Malformed lines — bad JSON, an unknown kind, a missing field — are skipped rather than fatal, so a noisy stream never aborts the run; EOF exits 0. Wired to a real source and sink it looks like:
 
 ```sh
-cargo build --release
-cargo test
+ctrace tail-events | ambient | osc-bridge --target 127.0.0.1:4559
+ambient --chime-secs 1 < events.ndjson > cues.ndjson   # tighter chime gap for a dense session
 ```
 
-14 tests pass at iter-1 (one per acceptance criterion, plus parser /
-throttle / mapping micro-tests).
+## Voices
 
-## Out of scope (deferred to future phases)
+Seven event kinds, each mapped to one voice:
 
-- The audio engine itself (Sonic Pi script / SuperCollider patch).
-- Sample library curation.
-- Daily `.wav` recorder (PRD Phase 2).
-- Annual album ritual (PRD Phase 3).
-- OSC bridge process.
+| Event           | Voice    | Sonic intent                                       |
+|-----------------|----------|----------------------------------------------------|
+| `file_save`     | chime    | soft, key-aligned                                  |
+| `file_create`   | piano    | stretched high register                            |
+| `build_pass`    | settle   | low harmonic resolve                               |
+| `build_fail`    | grain    | grain decay                                        |
+| `idle`          | silence  | actual silence                                     |
+| `high_focus`    | drift    | slow tonic slide — steeper with run length         |
+| `fragmentation` | poly     | polyrhythmic layering — denser with more switches  |
+
+## Throttling
+
+A burst of one kind of event shouldn't drown the piece in one voice, so each voice has a minimum gap; events that arrive inside the gap are dropped silently. The defaults, in seconds:
+
+| Voice | chime | piano | settle | grain | drift | poly | silence |
+|-------|-------|-------|--------|-------|-------|------|---------|
+| Gap   | 4     | 8     | 30     | 15    | 120   | 30   | 300     |
+
+Each is overridable with `--<voice>-secs N` (`--chime-secs`, `--drift-secs`, and so on).
+
+## Status and scope
+
+This is Phase 1 — the orchestrator. It's complete for what it covers: 14 tests pass, one per behavior guarantee plus parser, throttle, and mapping unit tests. Deferred to later phases and intentionally absent here: the audio engine itself, sample-library curation, the daily `.wav` recorder, the annual album, and the OSC bridge process.
 
 ## Provenance
 
-This crate was built end-to-end under
-[`/autobuilder`][autobuilder]'s 5-stage pipeline (intake → scaffold →
-iterate-and-prove → 25-receipt risk gate → postmortem). Receipts live
-under `target/autobuilder/receipts/`. See `agent/intent-card.json` for
-the 5-Whys-derived intent.
-
-[autobuilder]: https://github.com/j0yen/autobuilder
+Built end to end through the [autobuilder](https://github.com/j0yen/autobuilder) pipeline (intake → scaffold → iterate-and-prove → risk gate → postmortem). Receipts are under `target/autobuilder/receipts/`; the derived intent is in `agent/intent-card.json`.
 
 ## License
 
-Dual MIT / Apache-2.0. See `LICENSE-MIT` and `LICENSE-APACHE`.
+Dual-licensed under MIT or Apache-2.0. See `LICENSE-MIT` and `LICENSE-APACHE`.
